@@ -1,8 +1,8 @@
 #!/usr/bin/python3
-"""Greenshot für Omarchy: Bildschirmfoto aufnehmen und sofort beschriften.
+"""Snapmark für Omarchy: Bildschirmfoto aufnehmen und sofort beschriften.
 
-  greenshot [smart|region|windows|fullscreen]   aufnehmen, dann Editor
-  greenshot DATEI.png                           vorhandenes Bild bearbeiten
+  snapmark [smart|region|windows|fullscreen]   aufnehmen, dann Editor
+  snapmark DATEI.png                           vorhandenes Bild bearbeiten
 """
 
 import copy
@@ -19,7 +19,7 @@ MODES = ("smart", "region", "windows", "fullscreen")
 
 def capture(mode):
     """Nimmt über Omarchys Auswahl (eingefrorener Bildschirm) auf, liefert den Pfad oder None."""
-    tmp = tempfile.mkdtemp(prefix="greenshot-", dir=os.environ.get("XDG_RUNTIME_DIR"))
+    tmp = tempfile.mkdtemp(prefix="snapmark-", dir=os.environ.get("XDG_RUNTIME_DIR"))
     env = dict(os.environ, OMARCHY_SCREENSHOT_DIR=tmp)
     out = subprocess.run(["omarchy-capture-screenshot", mode, "save"],
                          env=env, capture_output=True, text=True).stdout.strip()
@@ -293,6 +293,31 @@ def draw_obj(cr, comp, obj):
         PangoCairo.show_layout(cr, layout)
 
 
+ACCENT = (0.13, 0.45, 0.95, 1.0)
+
+
+def halo_stroke(cr, color, width, halo=(1, 1, 1, 0.95)):
+    """Linie mit Saum in Gegenfarbe: bleibt auf hellem wie dunklem Bildinhalt sichtbar."""
+    cr.set_source_rgba(*halo)
+    cr.set_line_width(width + 2.5)
+    cr.stroke_preserve()
+    cr.set_source_rgba(*color)
+    cr.set_line_width(width)
+    cr.stroke()
+
+
+def draw_handle(cr, x, y):
+    cr.rectangle(round(x) - HANDLE + 0.5, round(y) - HANDLE + 0.5, HANDLE * 2, HANDLE * 2)
+    cr.set_source_rgba(1, 1, 1, 1)
+    cr.fill_preserve()
+    cr.set_source_rgba(0, 0, 0, 0.35)
+    cr.set_line_width(3)
+    cr.stroke_preserve()
+    cr.set_source_rgba(*ACCENT)
+    cr.set_line_width(1.5)
+    cr.stroke()
+
+
 def rgba_to_tuple(c):
     return (c.red, c.green, c.blue, c.alpha)
 
@@ -309,14 +334,18 @@ PALETTE = [
 ]
 
 CSS = """
-.palette { padding: 6px; border-radius: 12px; }
-.palette button.tool { min-width: 36px; min-height: 36px; padding: 0; border-radius: 8px; }
+.palette { padding: 6px; border-radius: 12px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); }
+.palette button.tool { min-width: 36px; min-height: 36px; padding: 0; border-radius: 8px; color: var(--window-fg-color); }
+.palette button.tool:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 .palette button.tool:checked { background: var(--accent-bg-color); color: var(--accent-fg-color); }
-.propbar { padding: 6px 12px; border-bottom: 1px solid var(--border-color); }
-.backdrop-canvas { background: color-mix(in srgb, var(--window-bg-color) 88%, black); }
-.page { box-shadow: 0 0 0 1px rgba(0,0,0,0.10), 0 3px 14px rgba(0,0,0,0.28); }
+.propbar { padding: 6px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent); }
+.prop-label { font-weight: 600; }
+.hint { opacity: 0.75; }
+.backdrop-canvas { background: color-mix(in srgb, var(--window-bg-color) 72%, black); }
+.page { box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 4px 18px rgba(0,0,0,0.40); }
 .swatch { min-width: 28px; min-height: 28px; padding: 2px; border-radius: 999px; }
-.statusbar { padding: 2px 8px; border-top: 1px solid var(--border-color); }
+.swatch:hover { background: color-mix(in srgb, currentColor 14%, transparent); }
+.statusbar { padding: 2px 8px; border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent); }
 """
 
 
@@ -326,8 +355,8 @@ def paint_swatch(cr, w, h, color):
     cr.arc(cx, cy, r, 0, 2 * math.pi)
     cr.set_source_rgba(*(color or WHITE))
     cr.fill_preserve()
-    cr.set_source_rgba(0, 0, 0, 0.25)
-    cr.set_line_width(1)
+    cr.set_source_rgba(0, 0, 0, 0.45)
+    cr.set_line_width(1.2)
     cr.stroke()
     if color is None:  # „keine Füllung“: durchgestrichen
         d = r * 0.7
@@ -479,7 +508,7 @@ def tool_icon(kind):
 
 class Editor(Adw.ApplicationWindow):
     def __init__(self, app, path):
-        super().__init__(application=app, title="Greenshot")
+        super().__init__(application=app, title="Snapmark")
         self.base = cairo.ImageSurface.create_from_png(path)
         self.objs = []
         self.undo_stack, self.redo_stack = [], []
@@ -546,7 +575,7 @@ class Editor(Adw.ApplicationWindow):
 
     def build_header(self):
         header = Adw.HeaderBar()
-        self.title = Adw.WindowTitle(title="Greenshot")
+        self.title = Adw.WindowTitle(title="Snapmark")
         header.set_title_widget(self.title)
         for icon, tip, cb in (("edit-undo-symbolic", "Rückgängig (Strg+Z)", self.undo),
                               ("edit-redo-symbolic", "Wiederholen (Strg+Y)", self.redo)):
@@ -595,7 +624,7 @@ class Editor(Adw.ApplicationWindow):
         def labeled(text, widget):
             b = Gtk.Box(spacing=6)
             label = Gtk.Label(label=text)
-            label.add_css_class("dim-label")
+            label.add_css_class("prop-label")
             b.append(label)
             b.append(widget)
             bar.append(b)
@@ -613,7 +642,7 @@ class Editor(Adw.ApplicationWindow):
         self.size_spin.connect("value-changed", lambda *_: self.prop_changed("size"))
         self.size_box, self.size_label = labeled("Größe", self.size_spin)
         self.hint = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
-        self.hint.add_css_class("dim-label")
+        self.hint.add_css_class("hint")
         bar.append(self.hint)
         return bar
 
@@ -621,8 +650,7 @@ class Editor(Adw.ApplicationWindow):
         bar = Gtk.Box(spacing=4)
         bar.add_css_class("statusbar")
         self.size_info = Gtk.Label(xalign=0, hexpand=True)
-        self.size_info.add_css_class("dim-label")
-        self.size_info.add_css_class("caption")
+        self.size_info.add_css_class("hint")
         bar.append(self.size_info)
         for icon, tip, cb in (
             ("zoom-out-symbolic", "Verkleinern (Strg+Minus)", lambda: self.set_zoom(self.zoom / 1.25)),
@@ -776,29 +804,21 @@ class Editor(Adw.ApplicationWindow):
             cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
             cr.rectangle(0, 0, width, height)
             cr.rectangle(x1 * z, y1 * z, (x2 - x1) * z, (y2 - y1) * z)
-            cr.set_source_rgba(0, 0, 0, 0.5)
+            cr.set_source_rgba(0, 0, 0, 0.62)
             cr.fill()
-            cr.set_source_rgba(1, 1, 1, 0.9)
-            cr.set_line_width(1)
-            cr.set_dash([4, 4])
             cr.rectangle(x1 * z + 0.5, y1 * z + 0.5, (x2 - x1) * z, (y2 - y1) * z)
-            cr.stroke()
-            cr.set_dash([])
+            halo_stroke(cr, WHITE, 1.5, (0, 0, 0, 0.7))
+            for hx, hy in ((x1, y1), (x2, y1), (x2, y2), (x1, y2)):
+                draw_handle(cr, hx * z, hy * z)
 
         if self.selected:
             x1, y1, x2, y2 = bounds(self.selected)
-            cr.set_line_width(1)
-            cr.set_dash([3, 3])
-            cr.set_source_rgba(0.2, 0.5, 1, 1)
-            cr.rectangle(x1 * z - 2.5, y1 * z - 2.5, (x2 - x1) * z + 5, (y2 - y1) * z + 5)
-            cr.stroke()
+            cr.rectangle(round(x1 * z) - 3.5, round(y1 * z) - 3.5, round((x2 - x1) * z) + 7, round((y2 - y1) * z) + 7)
+            cr.set_dash([5, 3])
+            halo_stroke(cr, ACCENT, 1.5)
             cr.set_dash([])
             for hx, hy in self.handles(self.selected):
-                cr.rectangle(hx * z - HANDLE, hy * z - HANDLE, HANDLE * 2, HANDLE * 2)
-                cr.set_source_rgba(1, 1, 1, 1)
-                cr.fill_preserve()
-                cr.set_source_rgba(0.2, 0.5, 1, 1)
-                cr.stroke()
+                draw_handle(cr, hx * z, hy * z)
 
         if self.editing:
             # Schreibmarke am Textende
@@ -811,11 +831,9 @@ class Editor(Adw.ApplicationWindow):
             x = (ob.pts[0][0] + pos.x / Pango.SCALE) * z
             y = (ob.pts[0][1] + pos.y / Pango.SCALE) * z
             h = max(pos.height / Pango.SCALE, ob.size) * z
-            cr.set_source_rgba(*ob.stroke)
-            cr.set_line_width(max(1.5, z * 2))
             cr.move_to(x + 1, y)
             cr.line_to(x + 1, y + h)
-            cr.stroke()
+            halo_stroke(cr, ob.stroke, max(1.5, z * 2))
 
     @staticmethod
     def norm(pts):
@@ -1225,7 +1243,7 @@ class Editor(Adw.ApplicationWindow):
 
 class App(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="org.mkm.greenshot", flags=Gio.ApplicationFlags.NON_UNIQUE)
+        super().__init__(application_id="org.mkm.snapmark", flags=Gio.ApplicationFlags.NON_UNIQUE)
 
     def do_activate(self):
         css = Gtk.CssProvider()
