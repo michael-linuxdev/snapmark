@@ -1250,6 +1250,7 @@ class App(Adw.Application):
         css.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        Gtk.Window.set_default_icon_name("org.mkm.snapmark")
         win = Editor(self, SOURCE)
         if SAVE_PATH is None:
             # Aufnahme liegt nur im Laufzeitordner; geladen ist sie, also wegräumen
