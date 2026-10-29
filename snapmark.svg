@@ -1,12 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#4cc95e"/>
-      <stop offset="1" stop-color="#22963a"/>
-    </linearGradient>
-  </defs>
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#tile)"/>
-  <rect x="2.5" y="2.5" width="59" height="59" rx="13.5" fill="none" stroke="#14692a" stroke-opacity="0.55"/>
-  <path d="M44 19.5C40.5 14.5 23 13.5 21.5 22.5C20 31 33 31 37 32.5C43.5 34.5 45.5 39 43 44C39.5 50.5 23.5 50.5 19.5 44"
-        fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="64" height="64" shape-rendering="crispEdges">
+  <!-- Pixel-S im Rahmen, im Stil des Omarchy-Logos; 16er-Raster -->
+  <rect width="16" height="16" fill="#1a1b26"/>
+  <g fill="#ffffff">
+    <rect x="0" y="0" width="16" height="1"/>
+    <rect x="0" y="15" width="16" height="1"/>
+    <rect x="0" y="1" width="1" height="14"/>
+    <rect x="15" y="1" width="1" height="14"/>
+    <rect x="5" y="3" width="7" height="2"/>
+    <rect x="4" y="5" width="2" height="2"/>
+    <rect x="5" y="7" width="6" height="2"/>
+    <rect x="10" y="9" width="2" height="2"/>
+    <rect x="4" y="11" width="7" height="2"/>
+  </g>
 </svg>
