@@ -56,27 +56,28 @@ import gi  # noqa: E402  erst nach der Aufnahme laden, damit die Auswahl sofort 
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
 gi.require_version("PangoCairo", "1.0")
 import cairo  # noqa: E402
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango, PangoCairo  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
 RED = (0.89, 0.11, 0.14, 1.0)
 WHITE = (1.0, 1.0, 1.0, 1.0)
 YELLOW = (1.0, 0.93, 0.0, 1.0)
 
-# Werkzeug: (Zeichen, Name, Taste)
+# Werkzeug: (Schlüssel, Name, Taste)
 TOOLS = [
-    ("select", "↖", "Auswählen", "Escape"),
-    ("rect", "▭", "Rechteck", "r"),
-    ("ellipse", "◯", "Ellipse", "e"),
-    ("line", "╱", "Linie", "l"),
-    ("arrow", "➜", "Pfeil", "a"),
-    ("freehand", "✎", "Freihand", "f"),
-    ("text", "T", "Text", "t"),
-    ("highlight", "▌", "Markieren", "h"),
-    ("obfuscate", "▦", "Unkenntlich machen", "o"),
-    ("counter", "①", "Zähler", "i"),
-    ("crop", "⛶", "Zuschneiden", "c"),
+    ("select", "Auswählen", "Escape"),
+    ("rect", "Rechteck", "r"),
+    ("ellipse", "Ellipse", "e"),
+    ("line", "Linie", "l"),
+    ("arrow", "Pfeil", "a"),
+    ("freehand", "Freihand", "f"),
+    ("text", "Text", "t"),
+    ("highlight", "Markieren", "h"),
+    ("obfuscate", "Unkenntlich machen", "o"),
+    ("counter", "Zähler", "i"),
+    ("crop", "Zuschneiden", "c"),
 ]
 
 # Vorgaben je Werkzeug; Änderungen in der Leiste bleiben für dieses Werkzeug bestehen.
@@ -302,7 +303,181 @@ def tuple_to_rgba(t):
     return c
 
 
-class Editor(Gtk.ApplicationWindow):
+PALETTE = [
+    RED, (0.96, 0.47, 0.0, 1.0), YELLOW, (0.18, 0.72, 0.29, 1.0), (0.11, 0.45, 0.91, 1.0),
+    (0.57, 0.25, 0.84, 1.0), (0.0, 0.0, 0.0, 1.0), (0.5, 0.5, 0.5, 1.0), WHITE,
+]
+
+CSS = """
+.palette { padding: 6px; border-radius: 12px; }
+.palette button.tool { min-width: 36px; min-height: 36px; padding: 0; border-radius: 8px; }
+.palette button.tool:checked { background: var(--accent-bg-color); color: var(--accent-fg-color); }
+.propbar { padding: 6px 12px; border-bottom: 1px solid var(--border-color); }
+.backdrop-canvas { background: color-mix(in srgb, var(--window-bg-color) 88%, black); }
+.page { box-shadow: 0 0 0 1px rgba(0,0,0,0.10), 0 3px 14px rgba(0,0,0,0.28); }
+.swatch { min-width: 28px; min-height: 28px; padding: 2px; border-radius: 999px; }
+.statusbar { padding: 2px 8px; border-top: 1px solid var(--border-color); }
+"""
+
+
+def paint_swatch(cr, w, h, color):
+    r = min(w, h) / 2 - 1
+    cx, cy = w / 2, h / 2
+    cr.arc(cx, cy, r, 0, 2 * math.pi)
+    cr.set_source_rgba(*(color or WHITE))
+    cr.fill_preserve()
+    cr.set_source_rgba(0, 0, 0, 0.25)
+    cr.set_line_width(1)
+    cr.stroke()
+    if color is None:  # „keine Füllung“: durchgestrichen
+        d = r * 0.7
+        cr.move_to(cx - d, cy + d)
+        cr.line_to(cx + d, cy - d)
+        cr.set_source_rgba(*RED)
+        cr.set_line_width(2)
+        cr.stroke()
+
+
+def swatch(color, size):
+    area = Gtk.DrawingArea(content_width=size, content_height=size)
+    area.color = color
+    area.set_draw_func(lambda a, cr, w, h: paint_swatch(cr, w, h, a.color))
+    return area
+
+
+class ColorPicker(Gtk.MenuButton):
+    """Farbknopf mit Vorgabefarben im Aufklappmenü, optional „keine“."""
+
+    def __init__(self, on_change, allow_none=False):
+        super().__init__(tooltip_text="Farbe wählen")
+        self.add_css_class("flat")
+        self.on_change = on_change
+        self.color = RED
+        self.preview = swatch(self.color, 20)
+        self.set_child(self.preview)
+
+        grid = Gtk.Grid(column_spacing=4, row_spacing=4, margin_start=6, margin_end=6, margin_top=6, margin_bottom=6)
+        colors = PALETTE + ([None] if allow_none else [])
+        for i, c in enumerate(colors):
+            b = Gtk.Button(child=swatch(c, 22), tooltip_text="Keine" if c is None else None)
+            b.add_css_class("flat")
+            b.add_css_class("swatch")
+            b.connect("clicked", lambda _b, c=c: self.pick(c))
+            grid.attach(b, i % 5, i // 5, 1, 1)
+        custom = Gtk.Button(label="Eigene Farbe …", margin_top=4)
+        custom.add_css_class("flat")
+        custom.connect("clicked", self.custom)
+        grid.attach(custom, 0, 2, 5, 1)
+        self.set_popover(Gtk.Popover(child=grid))
+
+    def set_color(self, color):
+        self.color = color
+        self.preview.color = color
+        self.preview.queue_draw()
+
+    def pick(self, color):
+        self.get_popover().popdown()
+        self.set_color(color)
+        self.on_change()
+
+    def custom(self, _btn):
+        self.get_popover().popdown()
+
+        def done(dlg, res):
+            try:
+                c = dlg.choose_rgba_finish(res)
+            except GLib.Error:
+                return
+            self.pick(rgba_to_tuple(c))
+        Gtk.ColorDialog(with_alpha=True).choose_rgba(self.get_root(), tuple_to_rgba(self.color or WHITE), None, done)
+
+
+def draw_icon(cr, kind, size):
+    """Werkzeugsymbole, gezeichnet auf einem 16er-Raster in der Textfarbe."""
+    cr.scale(size / 16, size / 16)
+    cr.set_line_width(1.6)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    if kind == "select":
+        for x, y in ((4, 2), (4, 13.5), (7, 10.8), (9.3, 15), (11, 14.2), (8.8, 10.2), (12.4, 10.2)):
+            cr.line_to(x, y)
+        cr.close_path()
+        cr.fill()
+    elif kind == "rect":
+        cr.rectangle(2.5, 4, 11, 8)
+        cr.stroke()
+    elif kind == "ellipse":
+        cr.save()
+        cr.translate(8, 8)
+        cr.scale(6, 4.8)
+        cr.arc(0, 0, 1, 0, 2 * math.pi)
+        cr.restore()
+        cr.stroke()
+    elif kind == "line":
+        cr.move_to(3, 13)
+        cr.line_to(13, 3)
+        cr.stroke()
+    elif kind == "arrow":
+        cr.move_to(3, 13)
+        cr.line_to(10.5, 5.5)
+        cr.stroke()
+        draw_arrow_head(cr, (3, 13), (13.5, 2.5), 1.6)
+    elif kind == "freehand":
+        cr.move_to(2, 11)
+        cr.curve_to(5, 2, 7, 15, 10, 8)
+        cr.curve_to(11.5, 4.5, 13, 6, 14, 4.5)
+        cr.stroke()
+    elif kind == "text":
+        cr.rectangle(3, 2.5, 10, 2.2)
+        cr.rectangle(6.9, 2.5, 2.2, 11)
+        cr.fill()
+    elif kind == "highlight":
+        r, g, b, a = cr.get_source().get_rgba()
+        cr.set_source_rgba(r, g, b, a * 0.4)
+        cr.rectangle(1.5, 6, 13, 4.5)
+        cr.fill()
+        cr.set_source_rgba(r, g, b, a)
+        for y in (3, 8.2, 13):
+            cr.move_to(3, y)
+            cr.line_to(13 if y != 13 else 9, y)
+        cr.stroke()
+    elif kind == "obfuscate":
+        r, g, b, a = cr.get_source().get_rgba()
+        for i in range(4):
+            for j in range(4):
+                cr.set_source_rgba(r, g, b, a * (1.0 if (i + j) % 2 == 0 else 0.35))
+                cr.rectangle(2 + i * 3, 2 + j * 3, 3, 3)
+                cr.fill()
+    elif kind == "counter":
+        cr.arc(8, 8, 6.2, 0, 2 * math.pi)
+        cr.stroke()
+        cr.move_to(6.6, 6)
+        cr.line_to(8.4, 4.8)
+        cr.line_to(8.4, 11.2)
+        cr.move_to(6.6, 11.2)
+        cr.line_to(10.2, 11.2)
+        cr.stroke()
+    elif kind == "crop":
+        cr.move_to(4.5, 1.5)
+        cr.line_to(4.5, 11.5)
+        cr.line_to(14.5, 11.5)
+        cr.move_to(1.5, 4.5)
+        cr.line_to(11.5, 4.5)
+        cr.line_to(11.5, 14.5)
+        cr.stroke()
+
+
+def tool_icon(kind):
+    area = Gtk.DrawingArea(content_width=20, content_height=20, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+
+    def draw(a, cr, w, h):
+        cr.set_source_rgba(*rgba_to_tuple(a.get_color()))
+        draw_icon(cr, kind, min(w, h))
+    area.set_draw_func(draw)
+    return area
+
+
+class Editor(Adw.ApplicationWindow):
     def __init__(self, app, path):
         super().__init__(application=app, title="Greenshot")
         self.base = cairo.ImageSurface.create_from_png(path)
@@ -321,12 +496,12 @@ class Editor(Gtk.ApplicationWindow):
         self.zoom = 1.0
         self.syncing = False
 
-        self.canvas = Gtk.DrawingArea(focusable=True)
+        self.canvas = Gtk.DrawingArea(focusable=True, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
+                                      margin_start=28, margin_end=28, margin_top=28, margin_bottom=28)
+        self.canvas.add_css_class("page")
         self.canvas.set_draw_func(self.on_draw)
-        self.canvas.set_halign(Gtk.Align.CENTER)
-        self.canvas.set_valign(Gtk.Align.CENTER)
-        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
-        scroller.set_child(self.canvas)
+        self.scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True, child=self.canvas)
+        self.scroller.add_css_class("backdrop-canvas")
 
         drag = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY)
         drag.connect("drag-begin", self.on_drag_begin)
@@ -348,20 +523,20 @@ class Editor(Gtk.ApplicationWindow):
         keys.connect("key-pressed", self.on_key)
         self.add_controller(keys)
 
-        self.status = Gtk.Label(xalign=0, margin_start=8, margin_end=8, margin_top=3, margin_bottom=3)
-        self.status.add_css_class("dim-label")
+        save_as = Gio.SimpleAction(name="save-as")
+        save_as.connect("activate", lambda *_: self.save_as())
+        self.add_action(save_as)
 
-        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.toasts = Adw.ToastOverlay(child=self.scroller)
+        body = Gtk.Box()
         body.append(self.build_tools())
-        body.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-        body.append(scroller)
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        root.append(self.build_props())
-        root.append(Gtk.Separator())
-        root.append(body)
-        root.append(Gtk.Separator())
-        root.append(self.status)
-        self.set_child(root)
+        body.append(self.toasts)
+
+        view = Adw.ToolbarView(content=body)
+        view.add_top_bar(self.build_header())
+        view.add_top_bar(self.build_props())
+        view.add_bottom_bar(self.build_status())
+        self.set_content(view)
 
         self.connect("close-request", self.on_close_request)
         self.set_tool("select")
@@ -369,15 +544,42 @@ class Editor(Gtk.ApplicationWindow):
 
     # ---------- Oberfläche ----------
 
+    def build_header(self):
+        header = Adw.HeaderBar()
+        self.title = Adw.WindowTitle(title="Greenshot")
+        header.set_title_widget(self.title)
+        for icon, tip, cb in (("edit-undo-symbolic", "Rückgängig (Strg+Z)", self.undo),
+                              ("edit-redo-symbolic", "Wiederholen (Strg+Y)", self.redo)):
+            b = Gtk.Button(icon_name=icon, tooltip_text=tip)
+            b.connect("clicked", lambda *_, f=cb: f())
+            header.pack_start(b)
+
+        menu = Gio.Menu()
+        menu.append("Speichern unter …", "win.save-as")
+        save = Adw.SplitButton(label="Speichern", menu_model=menu, tooltip_text="Im Bilderordner speichern (Strg+S)")
+        save.add_css_class("suggested-action")
+        save.connect("clicked", lambda *_: self.save())
+        header.pack_end(save)
+        copy_btn = Gtk.Button(child=Adw.ButtonContent(icon_name="edit-copy-symbolic", label="Kopieren"),
+                              tooltip_text="In die Zwischenablage (Strg+C)")
+        copy_btn.connect("clicked", lambda *_: self.copy_clipboard())
+        header.pack_end(copy_btn)
+        return header
+
     def build_tools(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_start=4, margin_end=4, margin_top=4)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.START,
+                      margin_start=8, margin_end=8, margin_top=8, margin_bottom=8)
+        box.add_css_class("card")
+        box.add_css_class("palette")
         self.tool_buttons = {}
         group = None
-        for key, glyph, name, accel in TOOLS:
-            btn = Gtk.ToggleButton(label=glyph, tooltip_text=f"{name} ({'Esc' if accel == 'Escape' else accel.upper()})")
+        for key, name, accel in TOOLS:
+            if key in ("rect", "text", "crop"):
+                box.append(Gtk.Separator(margin_top=3, margin_bottom=3))
+            btn = Gtk.ToggleButton(child=tool_icon(key),
+                                   tooltip_text=f"{name} ({'Esc' if accel == 'Escape' else accel.upper()})")
             btn.add_css_class("flat")
             btn.add_css_class("tool")
-            btn.set_size_request(36, 36)
             if group:
                 btn.set_group(group)
             group = group or btn
@@ -387,53 +589,53 @@ class Editor(Gtk.ApplicationWindow):
         return box
 
     def build_props(self):
-        bar = Gtk.Box(spacing=6, margin_start=8, margin_end=8, margin_top=4, margin_bottom=4)
+        bar = Gtk.Box(spacing=18)
+        bar.add_css_class("propbar")
 
         def labeled(text, widget):
-            b = Gtk.Box(spacing=4)
-            b.append(Gtk.Label(label=text))
+            b = Gtk.Box(spacing=6)
+            label = Gtk.Label(label=text)
+            label.add_css_class("dim-label")
+            b.append(label)
             b.append(widget)
             bar.append(b)
-            return b
+            return b, label
 
-        self.stroke_btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=True))
-        self.stroke_btn.connect("notify::rgba", lambda *_: self.prop_changed("stroke"))
-        self.stroke_box = labeled("Farbe", self.stroke_btn)
-
-        self.fill_check = Gtk.CheckButton()
-        self.fill_check.connect("toggled", lambda *_: self.prop_changed("fill"))
-        self.fill_btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=True))
-        self.fill_btn.set_rgba(tuple_to_rgba(WHITE))
-        self.fill_btn.connect("notify::rgba", lambda *_: self.prop_changed("fill"))
-        fb = Gtk.Box(spacing=2)
-        fb.append(self.fill_check)
-        fb.append(self.fill_btn)
-        self.fill_box = labeled("Füllung", fb)
-
+        self.stroke_btn = ColorPicker(lambda: self.prop_changed("stroke"))
+        self.stroke_box, _ = labeled("Farbe", self.stroke_btn)
+        self.fill_btn = ColorPicker(lambda: self.prop_changed("fill"), allow_none=True)
+        self.fill_btn.set_color(None)
+        self.fill_box, _ = labeled("Füllung", self.fill_btn)
         self.width_spin = Gtk.SpinButton.new_with_range(1, 40, 1)
         self.width_spin.connect("value-changed", lambda *_: self.prop_changed("width"))
-        self.width_box = labeled("Linie", self.width_spin)
-
+        self.width_box, _ = labeled("Linie", self.width_spin)
         self.size_spin = Gtk.SpinButton.new_with_range(4, 200, 1)
         self.size_spin.connect("value-changed", lambda *_: self.prop_changed("size"))
-        self.size_label = Gtk.Label()
-        self.size_box = Gtk.Box(spacing=4)
-        self.size_box.append(self.size_label)
-        self.size_box.append(self.size_spin)
-        bar.append(self.size_box)
+        self.size_box, self.size_label = labeled("Größe", self.size_spin)
+        self.hint = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+        self.hint.add_css_class("dim-label")
+        bar.append(self.hint)
+        return bar
 
-        bar.append(Gtk.Box(hexpand=True))
-        for label, tip, cb in (
-            ("↶", "Rückgängig (Strg+Z)", self.undo),
-            ("↷", "Wiederholen (Strg+Y)", self.redo),
-            ("Kopieren", "In die Zwischenablage (Strg+C)", self.copy_clipboard),
-            ("Speichern", "Im Bilderordner speichern (Strg+S)", self.save),
-            ("Speichern unter…", "Strg+Umschalt+S", self.save_as),
+    def build_status(self):
+        bar = Gtk.Box(spacing=4)
+        bar.add_css_class("statusbar")
+        self.size_info = Gtk.Label(xalign=0, hexpand=True)
+        self.size_info.add_css_class("dim-label")
+        self.size_info.add_css_class("caption")
+        bar.append(self.size_info)
+        for icon, tip, cb in (
+            ("zoom-out-symbolic", "Verkleinern (Strg+Minus)", lambda: self.set_zoom(self.zoom / 1.25)),
+            (None, "Originalgröße (Strg+0)", lambda: self.set_zoom(1 / self.get_scale_factor())),
+            ("zoom-in-symbolic", "Vergrößern (Strg+Plus)", lambda: self.set_zoom(self.zoom * 1.25)),
+            ("zoom-fit-best-symbolic", "Einpassen", self.fit),
         ):
-            b = Gtk.Button(label=label, tooltip_text=tip)
-            if len(label) == 1:
-                b.add_css_class("tool")
+            b = Gtk.Button(icon_name=icon, tooltip_text=tip) if icon else Gtk.Button(tooltip_text=tip)
+            b.add_css_class("flat")
             b.connect("clicked", lambda *_, f=cb: f())
+            if not icon:
+                self.zoom_btn = b
+                b.set_size_request(64, -1)
             bar.append(b)
         return bar
 
@@ -441,33 +643,31 @@ class Editor(Gtk.ApplicationWindow):
         """Leiste an Werkzeug bzw. ausgewähltes Objekt anpassen."""
         src = self.selected
         kind = src.kind if src else self.tool
-        d = self.defaults.get(kind)
-        show = d is not None
-        vals = dict(stroke=src.stroke, fill=src.fill, width=src.width, size=src.size) if src else (d or {})
+        d = self.defaults.get(kind) or {}
+        vals = dict(stroke=src.stroke, fill=src.fill, width=src.width, size=src.size) if src else d
         self.syncing = True
-        self.stroke_box.set_visible(show and "stroke" in (d or {}))
-        self.fill_box.set_visible(show and "fill" in (d or {}))
-        self.width_box.set_visible(show and "width" in (d or {}))
-        self.size_box.set_visible(show and "size" in (d or {}))
-        if show:
-            if vals.get("stroke"):
-                self.stroke_btn.set_rgba(tuple_to_rgba(vals["stroke"]))
-            self.fill_check.set_active(bool(vals.get("fill")))
-            if vals.get("fill"):
-                self.fill_btn.set_rgba(tuple_to_rgba(vals["fill"]))
-            if vals.get("width"):
-                self.width_spin.set_value(vals["width"])
-            if vals.get("size"):
-                self.size_spin.set_value(vals["size"])
-            self.size_label.set_label(SIZE_LABEL.get(kind, "Größe"))
+        self.stroke_box.set_visible("stroke" in d)
+        self.fill_box.set_visible("fill" in d)
+        self.width_box.set_visible("width" in d)
+        self.size_box.set_visible("size" in d)
+        if vals.get("stroke"):
+            self.stroke_btn.set_color(vals["stroke"])
+        if "fill" in d:
+            self.fill_btn.set_color(vals.get("fill"))
+        if vals.get("width"):
+            self.width_spin.set_value(vals["width"])
+        if vals.get("size"):
+            self.size_spin.set_value(vals["size"])
+        self.size_label.set_label(SIZE_LABEL.get(kind, "Größe"))
         self.syncing = False
+        self.update_status()
 
     def prop_changed(self, name):
         if self.syncing:
             return
         value = {
-            "stroke": lambda: rgba_to_tuple(self.stroke_btn.get_rgba()),
-            "fill": lambda: rgba_to_tuple(self.fill_btn.get_rgba()) if self.fill_check.get_active() else None,
+            "stroke": lambda: self.stroke_btn.color,
+            "fill": lambda: self.fill_btn.color,
             "width": lambda: self.width_spin.get_value(),
             "size": lambda: self.size_spin.get_value(),
         }[name]()
@@ -490,29 +690,47 @@ class Editor(Gtk.ApplicationWindow):
             self.selected = None
         self.canvas.set_cursor_from_name("default" if tool == "select" else "crosshair")
         self.sync_props()
-        self.update_status()
         self.canvas.queue_draw()
 
-    def update_status(self, msg=None):
+    def update_status(self):
         w, h = self.base.get_width(), self.base.get_height()
-        hint = {
-            "crop": "Bereich ziehen, Enter = zuschneiden, Esc = abbrechen",
-            "text": "Klicken und tippen, Esc = fertig",
-            "select": "Klicken = auswählen, ziehen = verschieben, Entf = löschen",
-        }.get(self.tool, "Ziehen zum Zeichnen, Umschalt = gerade/quadratisch")
-        self.status.set_label(msg or f"{w} × {h} px   {round(self.zoom * 100)} %   {hint}")
+        if self.tool == "select" and not self.selected:
+            hint = "Klicken = auswählen, ziehen = verschieben, Entf = löschen"
+        elif self.tool == "select":
+            hint = ""
+        else:
+            hint = {
+                "crop": "Bereich ziehen, Enter = zuschneiden, Esc = abbrechen",
+                "text": "Klicken und tippen, Esc = fertig",
+                "counter": "Klicken setzt die nächste Nummer",
+                "obfuscate": "Bereich ziehen, der verpixelt wird",
+            }.get(self.tool, "Ziehen zum Zeichnen, Umschalt = gerade bzw. quadratisch")
+        self.hint.set_label(hint)
+        name = os.path.basename(self.save_path) if self.save_path else "Neue Aufnahme"
+        self.title.set_subtitle(name + (" •" if self.changed else ""))
+        self.size_info.set_label(f"{w} × {h} px")
+        self.zoom_btn.set_label(f"{round(self.zoom * 100)} %")
+
+    def toast(self, msg):
+        self.toasts.add_toast(Adw.Toast(title=msg, timeout=2))
 
     def fit_initial(self):
-        display = Gdk.Display.get_default()
-        mons = display.get_monitors()
-        geo = mons.get_item(0).get_geometry() if mons.get_n_items() else None
-        scale = mons.get_item(0).get_scale_factor() if mons.get_n_items() else 1
+        mons = Gdk.Display.get_default().get_monitors()
+        mon = mons.get_item(0) if mons.get_n_items() else None
         w, h = self.base.get_width(), self.base.get_height()
-        zoom = 1 / scale
-        if geo:
-            zoom = min(zoom, (geo.width * 0.85 - 60) / w, (geo.height * 0.85 - 110) / h)
-            self.set_default_size(int(max(640, w * zoom + 60)), int(max(420, h * zoom + 110)))
+        zoom = 1 / (mon.get_scale_factor() if mon else 1)
+        if mon:
+            geo = mon.get_geometry()
+            chrome_w, chrome_h = 130, 200
+            zoom = min(zoom, (geo.width * 0.85 - chrome_w) / w, (geo.height * 0.85 - chrome_h) / h)
+            self.set_default_size(int(max(760, w * zoom + chrome_w)), int(max(520, h * zoom + chrome_h)))
         self.set_zoom(zoom)
+
+    def fit(self):
+        w = self.scroller.get_width() - 56
+        h = self.scroller.get_height() - 56
+        if w > 0 and h > 0:
+            self.set_zoom(min(w / self.base.get_width(), h / self.base.get_height()))
 
     def set_zoom(self, zoom):
         self.zoom = max(0.05, min(8.0, zoom))
@@ -525,7 +743,9 @@ class Editor(Gtk.ApplicationWindow):
 
     def touch(self):
         self.dirty = True
-        self.changed = True
+        if not self.changed:
+            self.changed = True
+            self.update_status()
         self.canvas.queue_draw()
 
     def composite(self):
@@ -884,7 +1104,7 @@ class Editor(Gtk.ApplicationWindow):
             self.selected.move(dx, dy)
             self.touch()
             return True
-        for key, _, _, accel in TOOLS:
+        for key, _, accel in TOOLS:
             if name.lower() == accel.lower() and accel != "Escape":
                 self.set_tool(key)
                 return True
@@ -943,14 +1163,15 @@ class Editor(Gtk.ApplicationWindow):
         # wl-copy bleibt im Hintergrund, die Zwischenablage überlebt also das Schließen des Editors
         p = subprocess.Popen(["wl-copy", "--type", "image/png"], stdin=subprocess.PIPE)
         p.communicate(self.png_bytes())
-        self.update_status("In die Zwischenablage kopiert")
+        self.toast("In die Zwischenablage kopiert")
 
     def write(self, path):
         with open(path, "wb") as f:
             f.write(self.png_bytes())
         self.save_path = path
         self.changed = False
-        self.update_status(f"Gespeichert: {path}")
+        self.update_status()
+        self.toast(f"Gespeichert: {path.replace(os.path.expanduser('~'), '~', 1)}")
 
     def save(self):
         if not self.save_path:
@@ -980,34 +1201,35 @@ class Editor(Gtk.ApplicationWindow):
         self.finish_text()
         if not self.changed:
             return False
-        alert = Gtk.AlertDialog(message="Änderungen speichern?",
-                                detail="Das Bild wurde seit dem letzten Speichern verändert.")
-        alert.set_buttons(["Abbrechen", "Verwerfen", "Speichern"])
-        alert.set_cancel_button(0)
-        alert.set_default_button(2)
+        alert = Adw.AlertDialog(heading="Änderungen speichern?",
+                                body="Das Bild wurde seit dem letzten Speichern verändert.")
+        alert.add_response("cancel", "Abbrechen")
+        alert.add_response("discard", "Verwerfen")
+        alert.add_response("save", "Speichern")
+        alert.set_response_appearance("discard", Adw.ResponseAppearance.DESTRUCTIVE)
+        alert.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        alert.set_default_response("save")
+        alert.set_close_response("cancel")
 
         def done(dlg, res):
-            try:
-                choice = dlg.choose_finish(res)
-            except GLib.Error:
-                return
-            if choice == 1:
+            choice = dlg.choose_finish(res)
+            if choice == "discard":
                 self.changed = False
                 self.close()
-            elif choice == 2:
+            elif choice == "save":
                 self.save()
                 self.close()
         alert.choose(self, None, done)
         return True
 
 
-class App(Gtk.Application):
+class App(Adw.Application):
     def __init__(self):
         super().__init__(application_id="org.mkm.greenshot", flags=Gio.ApplicationFlags.NON_UNIQUE)
 
     def do_activate(self):
         css = Gtk.CssProvider()
-        css.load_from_string(".tool { font-size: 18px; } .tool:checked { background: alpha(@accent_bg_color, 0.35); }")
+        css.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         win = Editor(self, SOURCE)
