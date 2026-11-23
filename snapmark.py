@@ -21,10 +21,12 @@ def capture(mode):
     """Nimmt über Omarchys Auswahl (eingefrorener Bildschirm) auf, liefert den Pfad oder None."""
     tmp = tempfile.mkdtemp(prefix="snapmark-", dir=os.environ.get("XDG_RUNTIME_DIR"))
     env = dict(os.environ, OMARCHY_SCREENSHOT_DIR=tmp)
-    out = subprocess.run(["omarchy-capture-screenshot", mode, "save"],
-                         env=env, capture_output=True, text=True).stdout.strip()
-    path = out.splitlines()[-1] if out else ""
-    return path if path and os.path.isfile(path) else None
+    # Seit Omarchy über omasnap aufnimmt, kommt kein Pfad mehr auf stdout:
+    # die Aufnahme ist die einzige PNG im eigenen Ordner.
+    subprocess.run(["omarchy-capture-screenshot", mode, "save"],
+                   env=env, capture_output=True, text=True)
+    pngs = sorted(f for f in os.listdir(tmp) if f.endswith(".png"))
+    return os.path.join(tmp, pngs[-1]) if pngs else None
 
 
 def target_dir():
